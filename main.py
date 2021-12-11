@@ -1,11 +1,30 @@
 import paramiko
+import socket
 from os import path
 from rich.console import Console
 from rich.traceback import install
+from rich import print
+
 from rich.progress import track
 
 install()
 console = Console(record=True)
+
+# ["192.168.1.104", "192.168.1.106", "192.168.1.102", "192.168.1.108", "192.168.1.110",]
+
+
+def check_port(host, port):
+    a_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    result_of_check = a_socket.connect_ex((host, port))
+    if result_of_check == 0:
+        print(f"Port {port} at {host} is [bold green]open[/bold green].")
+        a_socket.close()
+        return True
+    else:
+        print(f"Port {port} at {host} is [bold red]closed[/bold red].")
+        a_socket.close()
+        return False
+
 
 class paramikoSSH:
     """ Class which perform a connection via SSH with one host"""
@@ -37,7 +56,6 @@ class paramikoSSH:
             print(f"Connected to {ip}.")
         except paramiko.ssh_exception.NoValidConnectionsError:
             console.print_exception()
-
 
     def run_command(self, command):
         """ Run command into the Host
@@ -106,6 +124,7 @@ class paramikoSSH:
             console.print_exception()
             return False
 
+
 def active_wait_for_dut(dut_ip, max_attempts=100, user='root', passwd='root', connection_timeout=2):
     n_attempts = 1
     while n_attempts <= max_attempts:
@@ -120,8 +139,9 @@ def active_wait_for_dut(dut_ip, max_attempts=100, user='root', passwd='root', co
             print("DUT is ON")
             conn.close_connection()
             return
-    #print("DUT is NOT connected.")
+    # print("DUT is NOT connected.")
     raise Exception("DUT is NOT connected.")
+
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
