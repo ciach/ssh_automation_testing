@@ -1,16 +1,33 @@
+import logging
 import paramiko
 import socket
+from datetime import datetime
 from os import path
 from rich.console import Console
 from rich.traceback import install
 from rich import print
-
+from sys import stdout
+from time import sleep
 from rich.progress import track
 
 install()
 console = Console(record=True)
 
 # ["192.168.1.104", "192.168.1.106", "192.168.1.102", "192.168.1.108", "192.168.1.110",]
+
+log_dir = ""
+
+msg_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
+logging.basicConfig(filename='example.log', format=msg_format, level="INFO")
+root = logging.getLogger('ssh-client')
+root.setLevel(logging.INFO)
+
+# handler = logging.StreamHandler(stdout)
+# handler.setLevel(logging.DEBUG)
+# formatter = logging.Formatter(msg_format)
+# handler.setFormatter(formatter)
+# root.addHandler(handler)
 
 
 def check_port(host, port):
@@ -26,7 +43,7 @@ def check_port(host, port):
         return False
 
 
-class paramikoSSH:
+class paramiko_ssh_client:
     """ Class which perform a connection via SSH with one host"""
 
     def __init__(self, ip, user, passwd, timeout=None):
@@ -46,6 +63,7 @@ class paramikoSSH:
         self.client.set_missing_host_key_policy(
             paramiko.AutoAddPolicy())  # Establish default policy to get locally the host key
         try:
+            root.info("Connecting to: %s" % self.ip)
             self.client.connect(
                 hostname=self.ip,
                 port=self.port,
@@ -53,9 +71,12 @@ class paramikoSSH:
                 password=self.passwd,
                 timeout=self.timeout,
                 look_for_keys=False)
-            print(f"Connected to {ip}.")
-        except paramiko.ssh_exception.NoValidConnectionsError:
+            root.info("Connected to %s" % self.ip)
+            print(f"[green]Connected to: {self.ip}[/green]")
+        except paramiko.ssh_exception.NoValidConnectionsError as e:
+            root.exception("Can't connect to: '%s': '%s'", self.ip, e)
             console.print_exception()
+
 
     def run_command(self, command):
         """ Run command into the Host
@@ -109,6 +130,7 @@ class paramikoSSH:
     def close_connection(self):
         """ Close the SSH session with the Host"""
         self.client.close()
+        root.info("Disconnecting from %s" % self.ip)
         return str(f'SSH Connection closed to {self.ip}')
 
     def check_connection(self):
@@ -145,6 +167,12 @@ def active_wait_for_dut(dut_ip, max_attempts=100, user='root', passwd='root', co
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    print('PyCharm')
+    a = paramiko_ssh_client("192.168.1.104", "root", "odroid")
+    sleep(5)
+    a.close_connection()
+    sleep(1)
+    a = paramiko_ssh_client("192.168.1.102", "root", "odroid")
+    sleep(5)
+    a.close_connection()
 
 # See PyCharm help at https://www.jetbrains.com/help/pycharm/
