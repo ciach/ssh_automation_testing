@@ -8,6 +8,11 @@ from rich.console import Console
 from rich.theme import Theme
 from rich.traceback import install
 from rich import print
+from ssh2.session import Session
+from ssh2.sftp import LIBSSH2_FXF_CREAT, LIBSSH2_FXF_WRITE, \
+    LIBSSH2_SFTP_S_IRUSR, LIBSSH2_SFTP_S_IRGRP, LIBSSH2_SFTP_S_IWUSR, \
+    LIBSSH2_SFTP_S_IROTH, LIBSSH2_FXF_READ
+
 # from time import sleep
 # from rich.progress import track
 
@@ -46,6 +51,96 @@ def get_now_time():
     return str(datetime.now().strftime("%Y/%m/%d %H:%M:%S"))
 
 
+class ssh2_ssh_client:
+    def __init__(self, ip, user, passwd, ):
+        self.ip = ip
+        port = 22
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect((self.ip, port))
+        self.session = Session()
+        self.session.handshake(sock)
+        try:
+            self.session.userauth_password(user, passwd)
+            time_now = get_now_time()
+            console.print(f"[info]{time_now}[/info] | [green]{self.ip}[/green]: Connection established!")
+            logger.info("Connected to %s" % self.ip)
+        except Session.AuthenticationException as e:
+            logger.exception("Can't connect to: '%s': '%s'", self.ip, e)
+            console.print_exception()
+
+    def run_command(self, command, timeout=0):
+        """ run command and read output """
+        self.session.set_timeout(timeout)
+        channel = self.session.open_session()
+        time_now = get_now_time()
+        # channel.shell()
+        channel.execute(command, )
+        console.print(f"[info]{time_now}[/info] | {self.ip}: Running command: [bold]{command}[/bold]")
+        logger.info("Running command: %s @ %s" % (command, self.ip))
+        _stdout, _exit_status, _stderr = self._read(channel)
+        if len(_stdout) > 0:
+            logger.info("Command: %s output from %s:\n %s" % (command, self.ip, _stdout))
+        if _stderr != (0, b''):
+            logger.error("Command: %s error from %s:\n %s" % (command, self.ip, _stderr))
+        channel.close()
+        #time_now = get_now_time()
+        #console.print(f"[info]{time_now}[/info] | [green]{self.ip}[/green]: Disconnected")
+        return None
+
+    def _read(self, channel):
+        """ read the content of the channel """
+        size, data = channel.read()
+        results = ""
+        while size > 0:
+            results += data.decode("utf-8")
+            size, data = channel.read()
+        return results, channel.get_exit_status(), channel.read_stderr()
+
+    def send_file(self, from_path, to_path):
+        # send file from here to there
+        buf_size = 1024 * 1024
+        sftp = self.session.sftp_init()
+        mode = LIBSSH2_SFTP_S_IRUSR | \
+               LIBSSH2_SFTP_S_IWUSR | \
+               LIBSSH2_SFTP_S_IRGRP | \
+               LIBSSH2_SFTP_S_IROTH
+        f_flags = LIBSSH2_FXF_CREAT | LIBSSH2_FXF_WRITE
+        fileinfo = os.stat(from_path)
+        time_now = get_now_time()
+
+        console.print(f"[info]{time_now}[/info] | [green]{self.ip}[/green]: "
+                      f"Starting copy of local file {from_path} to remote {self.ip}:{to_path}")
+
+        now = datetime.now()
+        with open(from_path, 'rb', buf_size) as local_fh, \
+                sftp.open(to_path, f_flags, mode) as remote_fh:
+            data = local_fh.read(buf_size)
+            while data:
+                remote_fh.write(data)
+                data = local_fh.read(buf_size)
+        taken = datetime.now() - now
+        rate = (fileinfo.st_size / 1024000.0) / taken.total_seconds()
+        console.print(f"[info]{time_now}[/info] | [green]{self.ip}[/green]: "
+                      f"Finished writing remote file in {taken}, transfer rate {rate} MB/s")
+        logger.info('File sent from path -> %s to path -> %s with %s' % (from_path, to_path, self.ip))
+
+    def get_file(self, from_path, to_path):
+        # send file from there to here
+        sftp = self.session.sftp_init()
+        with sftp.open(from_path,
+                       LIBSSH2_FXF_READ, LIBSSH2_SFTP_S_IRUSR) as remote_fh, \
+                open(to_path, 'wb') as local_fh:
+            for size, data in remote_fh:
+                local_fh.write(data)
+        logger.info('File get from path -> %s to path -> %s with %s' % (from_path, to_path, self.ip))
+
+    def send_all_folder_files(self, origin_folder, destination_folder):
+        for file in os.listdir(origin_folder):
+            self.send_file(os.path.join(origin_folder, file), os.path.join(destination_folder, file))
+
+    def close_connection(self):
+        pass
+
 class paramiko_ssh_client:
     """ Class which perform a connection via SSH with one host"""
 
@@ -57,9 +152,7 @@ class paramiko_ssh_client:
         :param passwd: str password of the user
         """
         self.ip = ip
-        self.user = user
-        self.passwd = passwd
-        self.port = 22
+        port = 22
         self.timeout = timeout
         self.client = paramiko.SSHClient()
         # self.client.load_system_host_keys()
@@ -69,15 +162,18 @@ class paramiko_ssh_client:
             logger.info("Connecting to: %s" % self.ip)
             self.client.connect(
                 hostname=self.ip,
-                port=self.port,
-                username=self.user,
-                password=self.passwd,
+                port=port,
+                username=user,
+                password=passwd,
                 timeout=self.timeout,
                 look_for_keys=False)
             logger.info("Connected to %s" % self.ip)
             time_now = get_now_time()
-            console.print(f"[info]{time_now}[/info] [green]{self.ip}[/green]: Connection established!")
+            console.print(f"[info]{time_now}[/info] | [green]{self.ip}[/green]: Connection established!")
         except paramiko.ssh_exception.NoValidConnectionsError as e:
+            logger.exception("Can't connect to: '%s': '%s'", self.ip, e)
+            console.print_exception()
+        except paramiko.AuthenticationException as e:
             logger.exception("Can't connect to: '%s': '%s'", self.ip, e)
             console.print_exception()
 
@@ -88,7 +184,7 @@ class paramiko_ssh_client:
         """
         logger.info("Running command: %s @ %s" % (command, self.ip))
         time_now = get_now_time()
-        console.print(f"[info]{time_now}[/info] {self.ip}: Running command: [bold]{command}[/bold]")
+        console.print(f"[info]{time_now}[/info] | {self.ip}: Running command: [bold]{command}[/bold]")
         _stdin, _stdout, _stderr = self.client.exec_command(command)
         _stdout.channel.recv_exit_status()  # wait for finishing command
         stderr = _stderr.read().decode("utf8").strip()
@@ -107,7 +203,7 @@ class paramiko_ssh_client:
         """
         time_now = get_now_time()
         console.print(
-            f"[info]{time_now}[/info] {self.ip}: Sending file from [info2]{from_path}[/info2] to [bold]{to_path}[/bold]")
+            f"[info]{time_now}[/info] | {self.ip}: Sending file from [info2]{from_path}[/info2] to [bold]{to_path}[/bold]")
         t = paramiko.Transport((self.ip, 22))
         t.connect(username=self.user, password=self.passwd)
         sftp = paramiko.SFTPClient.from_transport(t)
@@ -133,7 +229,7 @@ class paramiko_ssh_client:
         """
         time_now = get_now_time()
         console.print(
-            f"[info]{time_now}[/info] {self.ip}: Getting file from [bold]{from_path}[/bold] to [info2]{to_path}[/info2]")
+            f"[info]{time_now}[/info] | {self.ip}: Getting file from [bold]{from_path}[/bold] to [info2]{to_path}[/info2]")
         t = paramiko.Transport((self.ip, 22))
         t.connect(username=self.user, password=self.passwd)
         sftp = paramiko.SFTPClient.from_transport(t)
@@ -147,7 +243,7 @@ class paramiko_ssh_client:
         self.client.close()
         logger.info("Disconnecting from %s" % self.ip)
         time_now = get_now_time()
-        console.print(f"[info]{time_now}[/info] [green]{self.ip}[/green]: Disconnected")
+        console.print(f"[info]{time_now}[/info] | [green]{self.ip}[/green]: Disconnected")
         return str(f'SSH Connection closed to {self.ip}')
 
     def check_connection(self):
@@ -182,4 +278,3 @@ def active_wait_for_dut(dut_ip, max_attempts=100, user='root', passwd='root', co
     # print("DUT is NOT connected.")
     raise Exception("DUT is NOT connected.")
 """
-
